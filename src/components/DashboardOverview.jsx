@@ -1,10 +1,12 @@
 // src/components/DashboardOverview.jsx
 
 import { useState, useEffect } from 'react';
-import { User2, Briefcase, DollarSign, Clock, PlayCircle, CheckCircle, ArrowRight, Package } from 'lucide-react';
+import { User2, Briefcase, DollarSign, Clock, PlayCircle, CheckCircle, ArrowRight, Package, Share2, Copy, Edit3 } from 'lucide-react';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { updateProfile } from 'firebase/auth';
+import { db, auth } from '../firebase';
 import dayjs from 'dayjs';
 
-// Componente reutilizable para las tarjetas de estadísticas con degradados
 const StatCard = ({ icon, title, value, gradient }) => (
   <div className={`relative p-6 rounded-2xl shadow-lg overflow-hidden text-white ${gradient} transition-transform transform hover:-translate-y-1`}>
     <div className="relative z-10">
@@ -24,7 +26,7 @@ const StatCard = ({ icon, title, value, gradient }) => (
   </div>
 );
 
-const DashboardOverview = ({ userName, clientCount, projects, materials }) => {
+const DashboardOverview = ({ userName, clientCount, projects, materials, addNotification, isReadOnly }) => {
   const [stats, setStats] = useState({
     activeProjects: 0,
     totalRevenue: '0.00',
@@ -32,22 +34,18 @@ const DashboardOverview = ({ userName, clientCount, projects, materials }) => {
     topMaterials: [],
   });
   const [recentProjects, setRecentProjects] = useState([]);
+  const [shareableLink, setShareableLink] = useState('');
+  const [isSharing, setIsSharing] = useState(false);
+  const [newDisplayName, setNewDisplayName] = useState(userName);
 
   useEffect(() => {
-    // --- CÁLCULOS DE PROYECTOS ---
     const active = projects.filter(p => p.status === 'en_proceso');
     const completed = projects.filter(p => p.status === 'completado');
     const revenue = completed.reduce((sum, project) => sum + (Number(project.budget) || 0), 0);
     
-    // Ordenar proyectos por fecha de creación para obtener los más recientes
-    const sortedProjects = [...projects].sort((a, b) => {
-        const dateA = a.createdAt?.toDate() || 0;
-        const dateB = b.createdAt?.toDate() || 0;
-        return dateB - dateA;
-    });
+    const sortedProjects = [...projects].sort((a, b) => (b.createdAt?.toDate() || 0) - (a.createdAt?.toDate() || 0));
     setRecentProjects(sortedProjects.slice(0, 4));
 
-    // --- CÁLCULOS DE MATERIALES ---
     const totalStockGrams = materials.reduce((sum, material) => sum + (Number(material.stockInGrams) || 0), 0);
     const totalStockKg = (totalStockGrams / 1000).toFixed(2);
     
@@ -56,13 +54,57 @@ const DashboardOverview = ({ userName, clientCount, projects, materials }) => {
 
     setStats({
       activeProjects: active.length,
-      completedProjects: completed.length,
       totalRevenue: revenue.toFixed(2),
       totalStockKg: totalStockKg,
       topMaterials: topMaterials,
     });
-
   }, [projects, materials]);
+
+  const handleUpdateName = async (e) => {
+    e.preventDefault();
+    if (!newDisplayName.trim()) {
+      addNotification('El nombre no puede estar vacío.', 'error');
+      return;
+    }
+    try {
+      await updateProfile(auth.currentUser, {
+        displayName: newDisplayName.trim(),
+      });
+      addNotification('Nombre actualizado con éxito. La página se recargará.', 'success');
+      setTimeout(() => window.location.reload(), 2000);
+    } catch (error) {
+      addNotification('No se pudo actualizar el nombre.', 'error');
+      console.error("Error updating profile:", error);
+    }
+  };
+
+  const handleShare = async () => {
+    setIsSharing(true);
+    try {
+      const shareCollectionPath = `/artifacts/default-app-id/public/shares`;
+      const docRef = await addDoc(collection(db, shareCollectionPath), {
+        userName,
+        clients: [], // No compartimos datos de clientes por privacidad
+        projects,
+        materials,
+        createdAt: serverTimestamp(),
+      });
+      
+      const link = `${window.location.origin}${window.location.pathname}?share=${docRef.id}`;
+      setShareableLink(link);
+      addNotification('Enlace para compartir creado con éxito.', 'success');
+    } catch (error) {
+      console.error("Error al crear el enlace para compartir:", error);
+      addNotification('No se pudo crear el enlace para compartir.', 'error');
+    } finally {
+      setIsSharing(false);
+    }
+  };
+
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(shareableLink);
+    addNotification('Enlace copiado al portapapeles.', 'success');
+  };
 
   const getStatusInfo = (status) => {
     switch (status) {
@@ -75,10 +117,51 @@ const DashboardOverview = ({ userName, clientCount, projects, materials }) => {
 
   return (
     <section className="space-y-8">
-      <div>
-        <h2 className="text-4xl font-extrabold text-gray-100">Bienvenido, {userName}!</h2>
-        <p className="text-gray-400 mt-1">Este es el centro de mando de tu negocio de impresión 3D.</p>
+      <div className="flex justify-between items-start">
+        <div>
+          <h2 className="text-4xl font-extrabold text-gray-100">Bienvenido, {userName}!</h2>
+          <p className="text-gray-400 mt-1">Este es el centro de mando de tu negocio de impresión 3D.</p>
+        </div>
+        {!isReadOnly && (
+          <button
+            onClick={handleShare}
+            disabled={isSharing}
+            className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white font-semibold rounded-lg shadow-md hover:bg-gray-500 transition-all disabled:opacity-50"
+          >
+            <Share2 size={18} />
+            {isSharing ? 'Creando...' : 'Compartir'}
+          </button>
+        )}
       </div>
+
+      {/* Formulario para cambiar el nombre si es el de por defecto */}
+      {userName === 'Usuario' && !isReadOnly && (
+        <div className="p-4 bg-indigo-900/50 border border-indigo-700 rounded-lg">
+          <p className="text-sm text-indigo-200 mb-2">Parece que tu cuenta no tiene un nombre. ¡Asígnate uno!</p>
+          <form onSubmit={handleUpdateName} className="flex items-center gap-2">
+            <input 
+              type="text"
+              value={newDisplayName}
+              onChange={(e) => setNewDisplayName(e.target.value)}
+              placeholder="Escribe tu nombre"
+              className="flex-grow p-2 bg-gray-700 rounded-md text-white"
+            />
+            <button type="submit" className="flex items-center gap-2 px-4 py-2 bg-indigo-600 rounded-md hover:bg-indigo-500">
+              <Edit3 size={16} />
+              Guardar
+            </button>
+          </form>
+        </div>
+      )}
+
+      {shareableLink && (
+        <div className="p-4 bg-gray-700 rounded-lg flex items-center justify-between gap-4">
+          <p className="text-sm text-green-300 truncate">Enlace: <span className="font-mono">{shareableLink}</span></p>
+          <button onClick={copyToClipboard} className="p-2 bg-green-600 rounded-md hover:bg-green-500">
+            <Copy size={18} />
+          </button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <StatCard 
@@ -108,7 +191,6 @@ const DashboardOverview = ({ userName, clientCount, projects, materials }) => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Columna de Proyectos Recientes */}
         <div className="lg:col-span-2 bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-xl font-bold text-white">Proyectos Recientes</h3>
@@ -138,7 +220,6 @@ const DashboardOverview = ({ userName, clientCount, projects, materials }) => {
           </div>
         </div>
 
-        {/* Columna de Top Materiales */}
         <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
           <h3 className="text-xl font-bold text-white mb-4">Top 5 Materiales en Stock</h3>
           <div className="space-y-3">
