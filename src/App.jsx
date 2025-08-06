@@ -15,7 +15,6 @@ import PricingCalculator from './components/PricingCalculator';
 import NotificationBell from './components/NotificationBell';
 import Analytics from './components/Analytics';
 import MaterialManagement from './components/MaterialManagement';
-import { Analytics } from "@vercel/analytics/next"
 // Paleta de colores unificada para la navegación y el dashboard
 const navButtonStyles = {
   dashboard: {
