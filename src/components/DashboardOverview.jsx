@@ -77,7 +77,7 @@ const DashboardOverview = ({ orgId }) => {
     <section className="space-y-8">
       <div>
         <h2 className="text-4xl font-extrabold text-gray-100">Bienvenido, {auth.currentUser?.displayName || auth.currentUser?.email}!</h2>
-        <p className="text-gray-400 mt-1">Este es el centro de mando de tu negocio de impresión 3D.</p>
+        <p className="text-gray-400 mt-1">Este es el centro de mando de tu negocio de impresión 3D xddd.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
