@@ -1,19 +1,48 @@
-// src/components/PricingCalculator.jsx
-
-import { useState, useEffect, useMemo } from 'react';
-import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import React, { useState, useEffect, useMemo } from 'react';
+import { doc, updateDoc, serverTimestamp, collection, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
-import { Calculator, Euro, Box, Save, LayoutGrid, Clock, Lock, Palette } from 'lucide-react';
+import { Calculator, Box, Save, LayoutGrid, Clock, Lock, Palette, Loader2 } from 'lucide-react';
 
-const PricingCalculator = ({ projects, materials, userId, addNotification }) => {
+const PricingCalculator = ({ orgId, addNotification }) => {
+  // Estados para los datos cargados desde Firestore
+  const [projects, setProjects] = useState([]);
+  const [materials, setMaterials] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Estados para los inputs de la calculadora
   const [selectedProject, setSelectedProject] = useState(null);
-  const [weight, setWeight] = useState(0);
-  const [materialType, setMaterialType] = useState('PLA');
-  const [designHours, setDesignHours] = useState(0);
+  const [weight, setWeight] = useState('');
+  const [materialType, setMaterialType] = useState('');
+  const [designHours, setDesignHours] = useState('');
   const [profitMargin, setProfitMargin] = useState(30);
   const [isBulk, setIsBulk] = useState(false);
   const [quantity, setQuantity] = useState(1);
   const [totalPrice, setTotalPrice] = useState(0);
+
+  // Cargar proyectos y materiales de la organización actual
+  useEffect(() => {
+    if (!orgId) {
+      setLoading(false);
+      return;
+    }
+    
+    const projectsRef = collection(db, 'organizations', orgId, 'projects');
+    const materialsRef = collection(db, 'organizations', orgId, 'materials');
+
+    const unsubscribeProjects = onSnapshot(projectsRef, (snapshot) => {
+      setProjects(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setLoading(false);
+    }, () => setLoading(false));
+
+    const unsubscribeMaterials = onSnapshot(materialsRef, (snapshot) => {
+      setMaterials(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
+    return () => {
+      unsubscribeProjects();
+      unsubscribeMaterials();
+    };
+  }, [orgId]);
 
   const editableProjects = useMemo(() => {
     return projects.filter(p => p.status === 'en_cola' || p.status === 'en_proceso');
@@ -23,16 +52,16 @@ const PricingCalculator = ({ projects, materials, userId, addNotification }) => 
 
   useEffect(() => {
     if (selectedProject) {
-      setWeight(selectedProject.weight || 0);
-      setMaterialType(selectedProject.material || 'PLA');
-      setDesignHours(selectedProject.designHours || 0);
+      setWeight(selectedProject.weight || '');
+      setMaterialType(selectedProject.material || '');
+      setDesignHours(selectedProject.designHours || '');
       setQuantity(selectedProject.quantity || 1);
       setIsBulk((selectedProject.quantity || 1) > 1);
       setTotalPrice(selectedProject.budget || 0);
     } else {
-      setWeight(0);
-      setMaterialType('PLA');
-      setDesignHours(0);
+      setWeight('');
+      setMaterialType('');
+      setDesignHours('');
       setQuantity(1);
       setIsBulk(false);
       setTotalPrice(0);
@@ -45,12 +74,11 @@ const PricingCalculator = ({ projects, materials, userId, addNotification }) => 
     const selectedMaterialObject = materials.find(m => m.type === materialType);
 
     if (!selectedMaterialObject) {
-      addNotification(`El material "${materialType}" no se encuentra en el inventario. No se puede calcular el precio.`, 'error');
+      addNotification(`El material "${materialType}" no se encuentra en el inventario.`, 'error');
       return;
     }
 
     const pricePerGram = (selectedMaterialObject.pricePerKg || 0) / 1000;
-
     const materialCost = Number(weight) * pricePerGram;
     const designCost = Number(designHours) * designCostPerHour;
     const totalCost = materialCost + designCost;
@@ -70,7 +98,7 @@ const PricingCalculator = ({ projects, materials, userId, addNotification }) => 
   };
 
   const handleSaveBudget = async () => {
-    if (!selectedProject || !userId || !totalPrice) {
+    if (!selectedProject || !orgId || !totalPrice) {
       addNotification('Por favor, selecciona un proyecto para poder guardar el presupuesto.', 'error');
       return;
     }
@@ -80,7 +108,8 @@ const PricingCalculator = ({ projects, materials, userId, addNotification }) => 
     }
     
     try {
-      const projectRef = doc(db, `/artifacts/default-app-id/users/${userId}/projects`, selectedProject.id);
+      // RUTA CORREGIDA: Apunta a la subcolección de la organización
+      const projectRef = doc(db, 'organizations', orgId, 'projects', selectedProject.id);
       await updateDoc(projectRef, {
         budget: Number(totalPrice),
         updatedAt: serverTimestamp(),
@@ -98,12 +127,7 @@ const PricingCalculator = ({ projects, materials, userId, addNotification }) => 
 
   const handleProjectSelect = (e) => {
     const projectId = e.target.value;
-    if (projectId === "") {
-      setSelectedProject(null);
-    } else {
-      const projectFound = projects.find(p => p.id === projectId);
-      setSelectedProject(projectFound);
-    }
+    setSelectedProject(projects.find(p => p.id === projectId) || null);
   };
 
   const availableMaterialTypes = useMemo(() => {
@@ -111,9 +135,12 @@ const PricingCalculator = ({ projects, materials, userId, addNotification }) => 
     return [...new Set(types)];
   }, [materials]);
 
+  if (loading) return <div className="flex justify-center items-center h-full"><Loader2 className="animate-spin text-blue-500" size={48} /></div>;
+  if (!orgId) return <div className="text-center text-gray-400">No se ha encontrado una organización activa.</div>;
+
   return (
     <section className="space-y-6">
-      <div className="bg-gray-800 p-8 rounded-xl shadow-2xl w-full max-w-xl mx-auto space-y-6">
+      <div className="bg-gray-800/50 border border-gray-700/50 p-8 rounded-xl shadow-2xl w-full max-w-xl mx-auto space-y-6">
         <h2 className="text-3xl font-bold text-gray-200 text-center">Calculadora de Precios</h2>
         
         <div className="relative">
@@ -132,7 +159,7 @@ const PricingCalculator = ({ projects, materials, userId, addNotification }) => 
         </div>
         
         {isProjectLocked && (
-          <div className="bg-yellow-900 border-l-4 border-yellow-500 text-yellow-200 p-4 rounded-r-lg flex items-center gap-3">
+          <div className="bg-yellow-900/50 border-l-4 border-yellow-500 text-yellow-200 p-4 rounded-r-lg flex items-center gap-3">
             <Lock size={24} />
             <div>
               <p className="font-bold">Proyecto Completado</p>
@@ -194,7 +221,7 @@ const PricingCalculator = ({ projects, materials, userId, addNotification }) => 
           </button>
         </form>
 
-        <div className="text-center bg-gray-700 p-6 rounded-lg space-y-4">
+        <div className="text-center bg-gray-900/50 p-6 rounded-lg space-y-4">
           <p className="text-gray-400 text-xl font-medium">Precio Estimado:</p>
           <p className="text-5xl font-extrabold text-green-400 mt-2">{totalPrice} €</p>
           <button onClick={handleSaveBudget}

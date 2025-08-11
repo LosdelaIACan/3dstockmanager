@@ -1,108 +1,166 @@
 import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, getDocs, addDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from './firebase';
 
 // Importa tus componentes de página/vista
 import AuthPage from './components/AuthPage';
 import DashboardOverview from './components/DashboardOverview';
 import ProjectManagement from './components/ProjectManagement';
-import TeamManagement from './components/TeamManagement'; // El nuevo componente
+import TeamManagement from './components/TeamManagement';
 import MaterialManagement from './components/MaterialManagement';
 import ClientManagement from './components/ClientManagement';
 import PricingCalculator from './components/PricingCalculator';
 import Analytics from './components/Analytics';
 import NotificationBell from './components/NotificationBell';
+import ExpenseManagement from './components/ExpenseManagement';
+import InvitationScreen from './components/InvitationScreen';
 
-// Iconos para el sidebar (puedes usar los que prefieras)
-import { Home, Folder, Users, Package, Briefcase, DollarSign, BarChart2, LogOut } from 'lucide-react';
+// Iconos para el sidebar
+import { Home, Folder, Users, Package, Briefcase, BarChart2, LogOut, Info, CheckCircle, XCircle, Calculator, CreditCard } from 'lucide-react';
+
+// --- NUEVO: Definición de Roles y Permisos ---
+const ROLES = {
+  OWNER: 'owner',
+  ADMIN: 'admin',
+  EDITOR: 'editor',
+  VIEWER: 'viewer',
+};
+
+const PERMISSIONS = {
+  [ROLES.OWNER]: ['overview', 'projects', 'team', 'materials', 'clients', 'expenses', 'calculator', 'analytics'],
+  [ROLES.ADMIN]: ['overview', 'projects', 'team', 'materials', 'clients', 'expenses', 'calculator', 'analytics'],
+  [ROLES.EDITOR]: ['overview', 'projects', 'materials', 'clients', 'expenses', 'calculator', 'analytics'],
+  [ROLES.VIEWER]: ['overview', 'projects', 'materials', 'clients', 'expenses', 'calculator', 'analytics'], // Verán los componentes pero con acciones deshabilitadas
+};
+
+const NAV_ITEMS = [
+    { id: 'overview', label: 'Resumen', icon: Home },
+    { id: 'projects', label: 'Proyectos', icon: Folder },
+    { id: 'team', label: 'Equipo', icon: Users },
+    { id: 'materials', label: 'Materiales', icon: Package },
+    { id: 'clients', label: 'Clientes', icon: Briefcase },
+    { id: 'expenses', label: 'Gastos', icon: CreditCard },
+    { id: 'calculator', label: 'Calculadora', icon: Calculator },
+    { id: 'analytics', label: 'Analíticas', icon: BarChart2 },
+];
+
+
+// Componente para mostrar notificaciones emergentes
+const NotificationPopup = ({ notification }) => {
+  const iconMap = {
+    success: <CheckCircle className="text-green-400" />,
+    error: <XCircle className="text-red-400" />,
+    info: <Info className="text-blue-400" />,
+  };
+
+  return (
+    <div className={`fixed bottom-5 right-5 flex items-center gap-4 p-4 rounded-lg shadow-2xl bg-gray-800 border border-gray-700/50 animate-fade-in-up`}>
+      {iconMap[notification.type]}
+      <p className="text-white">{notification.message}</p>
+    </div>
+  );
+};
 
 
 function App() {
   const [user, setUser] = useState(null);
-  const [userOrg, setUserOrg] = useState(null); // Estado para guardar la organización del usuario
-  const [userRole, setUserRole] = useState(''); // Estado para guardar el rol del usuario
-  const [loading, setLoading] = useState(true); // Estado de carga para la sesión inicial
-  const [view, setView] = useState('overview'); // Estado para controlar qué vista se muestra
+  const [userOrg, setUserOrg] = useState(null);
+  const [userRole, setUserRole] = useState('');
+  const [pendingInvitation, setPendingInvitation] = useState(null); // Estado para la invitación
+  const [loading, setLoading] = useState(true);
+  const [view, setView] = useState('overview');
+  const [notification, setNotification] = useState(null);
+
+  const addNotification = (message, type = 'info') => {
+    setNotification({ message, type });
+    setTimeout(() => setNotification(null), 4000);
+  };
 
   useEffect(() => {
-    // onAuthStateChanged es un listener que se ejecuta cuando el usuario inicia o cierra sesión
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (currentUser) {
-        // 1. Si hay un usuario, lo guardamos en el estado
-        setUser(currentUser);
-        
-        // 2. Buscamos la organización a la que pertenece el usuario
-        // Esta consulta busca en la colección 'organizations' un documento donde el array 'members'
-        // contenga un objeto con el UID del usuario actual.
-        const orgsQuery = query(
-          collection(db, 'organizations'),
-          where('members', 'array-contains-any', [{uid: currentUser.uid}]) // Esto puede requerir un índice compuesto
-        );
-
-        // Una forma más robusta si la anterior no funciona bien con arrays de objetos complejos
-        const orgsRef = collection(db, "organizations");
-        const snapshot = await getDocs(orgsRef);
-        let foundOrg = null;
-        let foundRole = '';
-
-        snapshot.forEach(doc => {
-            const orgData = doc.data();
-            const member = orgData.members.find(m => m.uid === currentUser.uid);
-            if(member) {
-                foundOrg = { id: doc.id, ...orgData };
-                foundRole = member.role;
-            }
-        });
-
-        if (foundOrg) {
-          setUserOrg(foundOrg);
-          setUserRole(foundRole);
-        }
-
-      } else {
-        // Si no hay usuario, reseteamos todos los estados
-        setUser(null);
+    const authUnsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      if (!currentUser) {
         setUserOrg(null);
         setUserRole('');
+        setPendingInvitation(null);
+        setLoading(false);
       }
-      // 3. Terminamos el estado de carga
-      setLoading(false);
     });
-
-    // Limpiamos el listener cuando el componente se desmonta para evitar fugas de memoria
-    return () => unsubscribe();
+    return () => authUnsubscribe();
   }, []);
+
+  // Función centralizada para comprobar el estado del usuario (organización e invitaciones)
+  const checkUserStatus = async (currentUser) => {
+    if (!currentUser) return;
+    setLoading(true);
+
+    // 1. Comprobar si ya pertenece a una organización
+    let orgQuery = query(collection(db, "organizations"), where("memberUIDs", "array-contains", currentUser.uid));
+    let orgSnapshot = await getDocs(orgQuery);
+
+    if (!orgSnapshot.empty) {
+      const orgDoc = orgSnapshot.docs[0];
+      const orgData = { id: orgDoc.id, ...orgDoc.data() };
+      const memberInfo = orgData.members.find(m => m.uid === currentUser.uid);
+      setUserOrg(orgData);
+      setUserRole(memberInfo.role);
+      setPendingInvitation(null);
+      setLoading(false);
+      return;
+    }
+
+    // 2. Si no, comprobar si tiene invitaciones pendientes
+    orgQuery = query(collection(db, "organizations"), where("pendingInvites", "array-contains", currentUser.email));
+    orgSnapshot = await getDocs(orgQuery);
+
+    if (!orgSnapshot.empty) {
+      const orgDoc = orgSnapshot.docs[0];
+      setPendingInvitation({ orgId: orgDoc.id, orgName: orgDoc.data().name });
+      setLoading(false);
+      return;
+    }
+
+    // 3. Si no tiene ni organización ni invitación, es un usuario nuevo y creamos su propia organización
+    const newOrgRef = collection(db, 'organizations');
+    await addDoc(newOrgRef, {
+        ownerId: currentUser.uid, name: `${currentUser.email.split('@')[0]}'s Team`,
+        members: [{ uid: currentUser.uid, email: currentUser.email, role: 'owner' }],
+        memberUIDs: [currentUser.uid], createdAt: serverTimestamp(), pendingInvites: []
+    });
+    await checkUserStatus(currentUser); // Volvemos a comprobar para cargar la nueva organización
+  };
+
+  useEffect(() => {
+    if (user) {
+      checkUserStatus(user);
+    }
+  }, [user]);
 
   const handleSignOut = () => {
     signOut(auth).catch((error) => console.error('Error signing out: ', error));
   };
 
-  // Función para renderizar el componente principal según la vista seleccionada
   const renderContent = () => {
-    if (!userOrg) {
-      return <div className="text-white">Cargando datos de la organización...</div>;
+    // Si hay una invitación pendiente, se muestra la pantalla de invitación
+    if (pendingInvitation) {
+      return <InvitationScreen user={user} invitation={pendingInvitation} onDecision={() => checkUserStatus(user)} />;
     }
-
+    
+    if (user && !userOrg && !loading) {
+      return <div className="text-white text-center p-8">Comprobando estado de la organización...</div>;
+    }
+    
     switch (view) {
-      case 'overview':
-        return <DashboardOverview />;
-      case 'projects':
-        // Pasamos el ID de la organización y el rol del usuario para gestionar permisos
-        return <ProjectManagement orgId={userOrg.id} userRole={userRole} />;
-      case 'team':
-        // Pasamos el usuario y la organización completa para gestionar miembros
-        return <TeamManagement user={user} organization={userOrg} />;
-      case 'materials':
-        return <MaterialManagement />;
-      case 'clients':
-        return <ClientManagement />;
-      case 'calculator':
-        return <PricingCalculator />;
-      case 'analytics':
-        return <Analytics />;
-      default:
-        return <DashboardOverview />;
+      case 'overview': return <DashboardOverview orgId={userOrg?.id} />;
+      case 'projects': return <ProjectManagement orgId={userOrg?.id} userRole={userRole} addNotification={addNotification} />;
+      case 'team': return <TeamManagement user={user} organization={userOrg} addNotification={addNotification} />;
+      case 'materials': return <MaterialManagement orgId={userOrg?.id} userRole={userRole} addNotification={addNotification} />;
+      case 'clients': return <ClientManagement orgId={userOrg?.id} userRole={userRole} addNotification={addNotification} />;
+      case 'expenses': return <ExpenseManagement orgId={userOrg?.id} userRole={userRole} addNotification={addNotification} />;
+      case 'calculator': return <PricingCalculator orgId={userOrg?.id} addNotification={addNotification} />;
+      case 'analytics': return <Analytics orgId={userOrg?.id} />;
+      default: return <DashboardOverview orgId={userOrg?.id} />;
     }
   };
 
@@ -113,39 +171,57 @@ function App() {
   if (!user) {
     return <AuthPage />;
   }
+  
+  const userPermissions = PERMISSIONS[userRole] || [];
 
   return (
-    <div className="flex h-screen bg-gray-900 text-white">
-      {/* Sidebar */}
-      <aside className="w-64 bg-gray-800 p-4 flex flex-col">
-        <div className="text-2xl font-bold mb-8">3D Stock Manager</div>
-        <nav className="flex flex-col space-y-2">
-          <button onClick={() => setView('overview')} className={`flex items-center p-2 rounded ${view === 'overview' ? 'bg-blue-600' : ''}`}><Home className="mr-3" /> Resumen</button>
-          <button onClick={() => setView('projects')} className={`flex items-center p-2 rounded ${view === 'projects' ? 'bg-blue-600' : ''}`}><Folder className="mr-3" /> Proyectos</button>
-          <button onClick={() => setView('team')} className={`flex items-center p-2 rounded ${view === 'team' ? 'bg-blue-600' : ''}`}><Users className="mr-3" /> Equipo</button>
-          <button onClick={() => setView('materials')} className={`flex items-center p-2 rounded ${view === 'materials' ? 'bg-blue-600' : ''}`}><Package className="mr-3" /> Materiales</button>
-          <button onClick={() => setView('clients')} className={`flex items-center p-2 rounded ${view === 'clients' ? 'bg-blue-600' : ''}`}><Briefcase className="mr-3" /> Clientes</button>
-          <button onClick={() => setView('calculator')} className={`flex items-center p-2 rounded ${view === 'calculator' ? 'bg-blue-600' : ''}`}><DollarSign className="mr-3" /> Calculadora</button>
-          <button onClick={() => setView('analytics')} className={`flex items-center p-2 rounded ${view === 'analytics' ? 'bg-blue-600' : ''}`}><BarChart2 className="mr-3" /> Analíticas</button>
-        </nav>
-        <div className="mt-auto">
-           <button onClick={handleSignOut} className="flex items-center w-full p-2 rounded hover:bg-red-600"><LogOut className="mr-3" /> Cerrar Sesión</button>
-        </div>
-      </aside>
+    <div className="flex h-screen bg-gray-900 text-white font-sans">
+      {/* Si hay una invitación pendiente, no mostramos la interfaz principal */}
+      {!pendingInvitation && (
+        <aside className="w-64 bg-gray-800 p-5 flex flex-col shrink-0">
+          <div className="flex items-center mb-10">
+            <img src="/logo.png" alt="Logo" className="h-8 w-8 mr-3"/>
+            <span className="text-xl font-bold">3D Stock Manager</span>
+          </div>
+          <nav className="flex flex-col space-y-2">
+            {NAV_ITEMS.map(item => {
+                // --- LÓGICA DE PERMISOS APLICADA AQUÍ ---
+                if (!userPermissions.includes(item.id)) {
+                    return null; // Si el usuario no tiene permiso, no se renderiza el botón
+                }
+                const Icon = item.icon;
+                return (
+                    <button 
+                        key={item.id}
+                        onClick={() => setView(item.id)} 
+                        className={`flex items-center p-3 rounded-lg transition-colors ${view === item.id ? 'bg-blue-600' : 'hover:bg-gray-700'}`}
+                    >
+                        <Icon className="mr-4" size={20} /> {item.label}
+                    </button>
+                );
+            })}
+          </nav>
+          <div className="mt-auto">
+             <button onClick={handleSignOut} className="flex items-center w-full p-3 rounded-lg hover:bg-red-600/80 transition-colors"><LogOut className="mr-4" size={20} /> Cerrar Sesión</button>
+          </div>
+        </aside>
+      )}
 
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col">
-        <header className="bg-gray-800 p-4 flex justify-end items-center">
-            <NotificationBell />
-            <div className="ml-4">
-                <p className="font-semibold">{user.email}</p>
-                <p className="text-xs text-gray-400">Rol: {userRole}</p>
-            </div>
-        </header>
-        <main className="flex-1 p-6 overflow-y-auto">
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {!pendingInvitation && (
+          <header className="bg-gray-900/50 backdrop-blur-sm p-4 flex justify-end items-center border-b border-gray-700/50">
+              <NotificationBell orgId={userOrg?.id} />
+              <div className="ml-4 text-right">
+                  <p className="font-semibold text-sm">{user.email}</p>
+                  <p className="text-xs text-gray-400 capitalize">{userOrg?.name || 'Personal'} - {userRole}</p>
+              </div>
+          </header>
+        )}
+        <main className="flex-1 p-6 lg:p-8 overflow-y-auto">
           {renderContent()}
         </main>
       </div>
+      {notification && <NotificationPopup notification={notification} />}
     </div>
   );
 }

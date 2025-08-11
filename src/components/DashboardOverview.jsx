@@ -1,110 +1,65 @@
-// src/components/DashboardOverview.jsx
-
-import { useState, useEffect } from 'react';
-import { User2, Briefcase, DollarSign, Clock, PlayCircle, CheckCircle, ArrowRight, Package, Share2, Copy, Edit3 } from 'lucide-react';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { updateProfile } from 'firebase/auth';
+import React, { useState, useEffect } from 'react';
+import { collection, onSnapshot, query } from 'firebase/firestore';
 import { db, auth } from '../firebase';
+import { User2, Briefcase, DollarSign, Clock, PlayCircle, CheckCircle, ArrowRight, Package, Loader2 } from 'lucide-react';
 import dayjs from 'dayjs';
 
 const StatCard = ({ icon, title, value, gradient }) => (
   <div className={`relative p-6 rounded-2xl shadow-lg overflow-hidden text-white ${gradient} transition-transform transform hover:-translate-y-1`}>
     <div className="relative z-10">
       <div className="flex items-center gap-4">
-        <div className="bg-white/20 p-3 rounded-xl">
-          {icon}
-        </div>
+        <div className="bg-white/20 p-3 rounded-xl">{icon}</div>
         <div>
           <p className="text-sm font-medium text-white/90">{title}</p>
           <p className="text-3xl font-bold">{value}</p>
         </div>
       </div>
     </div>
-    <div className="absolute -bottom-8 -right-8 text-white/10 scale-150">
-      {icon}
-    </div>
+    <div className="absolute -bottom-8 -right-8 text-white/10 scale-150">{icon}</div>
   </div>
 );
 
-const DashboardOverview = ({ userName, clientCount, projects, materials, addNotification, isReadOnly }) => {
-  const [stats, setStats] = useState({
-    activeProjects: 0,
-    totalRevenue: '0.00',
-    totalStockKg: '0.00',
-    topMaterials: [],
-  });
-  const [recentProjects, setRecentProjects] = useState([]);
-  const [shareableLink, setShareableLink] = useState('');
-  const [isSharing, setIsSharing] = useState(false);
-  const [newDisplayName, setNewDisplayName] = useState(userName);
+const DashboardOverview = ({ orgId }) => {
+  const [projects, setProjects] = useState([]);
+  const [materials, setMaterials] = useState([]);
+  const [clients, setClients] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const active = projects.filter(p => p.status === 'en_proceso');
-    const completed = projects.filter(p => p.status === 'completado');
-    const revenue = completed.reduce((sum, project) => sum + (Number(project.budget) || 0), 0);
-    
-    const sortedProjects = [...projects].sort((a, b) => (b.createdAt?.toDate() || 0) - (a.createdAt?.toDate() || 0));
-    setRecentProjects(sortedProjects.slice(0, 4));
-
-    const totalStockGrams = materials.reduce((sum, material) => sum + (Number(material.stockInGrams) || 0), 0);
-    const totalStockKg = (totalStockGrams / 1000).toFixed(2);
-    
-    const sortedMaterials = [...materials].sort((a, b) => (b.stockInGrams || 0) - (a.stockInGrams || 0));
-    const topMaterials = sortedMaterials.slice(0, 5);
-
-    setStats({
-      activeProjects: active.length,
-      totalRevenue: revenue.toFixed(2),
-      totalStockKg: totalStockKg,
-      topMaterials: topMaterials,
-    });
-  }, [projects, materials]);
-
-  const handleUpdateName = async (e) => {
-    e.preventDefault();
-    if (!newDisplayName.trim()) {
-      addNotification('El nombre no puede estar vacío.', 'error');
+    if (!orgId) {
+      setLoading(false);
       return;
     }
-    try {
-      await updateProfile(auth.currentUser, {
-        displayName: newDisplayName.trim(),
-      });
-      addNotification('Nombre actualizado con éxito. La página se recargará.', 'success');
-      setTimeout(() => window.location.reload(), 2000);
-    } catch (error) {
-      addNotification('No se pudo actualizar el nombre.', 'error');
-      console.error("Error updating profile:", error);
-    }
-  };
 
-  const handleShare = async () => {
-    setIsSharing(true);
-    try {
-      const shareCollectionPath = `/artifacts/default-app-id/public/shares`;
-      const docRef = await addDoc(collection(db, shareCollectionPath), {
-        userName,
-        clients: [], // No compartimos datos de clientes por privacidad
-        projects,
-        materials,
-        createdAt: serverTimestamp(),
-      });
-      
-      const link = `${window.location.origin}${window.location.pathname}?share=${docRef.id}`;
-      setShareableLink(link);
-      addNotification('Enlace para compartir creado con éxito.', 'success');
-    } catch (error) {
-      console.error("Error al crear el enlace para compartir:", error);
-      addNotification('No se pudo crear el enlace para compartir.', 'error');
-    } finally {
-      setIsSharing(false);
-    }
-  };
+    const projectsRef = collection(db, 'organizations', orgId, 'projects');
+    const materialsRef = collection(db, 'organizations', orgId, 'materials');
+    const clientsRef = collection(db, 'organizations', orgId, 'clients');
 
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(shareableLink);
-    addNotification('Enlace copiado al portapapeles.', 'success');
-  };
+    const unsubscribeProjects = onSnapshot(projectsRef, (snapshot) => {
+      setProjects(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const unsubscribeMaterials = onSnapshot(materialsRef, (snapshot) => {
+      setMaterials(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const unsubscribeClients = onSnapshot(clientsRef, (snapshot) => {
+      setClients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setLoading(false);
+    }, () => setLoading(false));
+
+    return () => {
+      unsubscribeProjects();
+      unsubscribeMaterials();
+      unsubscribeClients();
+    };
+  }, [orgId]);
+
+  // --- Cálculos de Estadísticas ---
+  const activeProjects = projects.filter(p => p.status === 'en_proceso').length;
+  const totalRevenue = projects.filter(p => p.status === 'completado').reduce((sum, p) => sum + (Number(p.budget) || 0), 0).toFixed(2);
+  const totalStockKg = (materials.reduce((sum, m) => sum + (Number(m.stockInGrams) || 0), 0) / 1000).toFixed(2);
+  const clientCount = clients.length;
+  const recentProjects = [...projects].sort((a, b) => (b.createdAt?.toDate() || 0) - (a.createdAt?.toDate() || 0)).slice(0, 4);
+  const topMaterials = [...materials].sort((a, b) => (b.stockInGrams || 0) - (a.stockInGrams || 0)).slice(0, 5);
 
   const getStatusInfo = (status) => {
     switch (status) {
@@ -115,128 +70,52 @@ const DashboardOverview = ({ userName, clientCount, projects, materials, addNoti
     }
   };
 
+  if (loading) return <div className="flex justify-center items-center h-full"><Loader2 className="animate-spin text-blue-500" size={48} /></div>;
+  if (!orgId) return <div className="text-center text-gray-400">No se ha encontrado una organización activa.</div>;
+
   return (
     <section className="space-y-8">
-      <div className="flex justify-between items-start">
-        <div>
-          <h2 className="text-4xl font-extrabold text-gray-100">Bienvenido, {userName}!</h2>
-          <p className="text-gray-400 mt-1">Este es el centro de mando de tu negocio de impresión 3D.</p>
-        </div>
-        {!isReadOnly && (
-          <button
-            onClick={handleShare}
-            disabled={isSharing}
-            className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white font-semibold rounded-lg shadow-md hover:bg-gray-500 transition-all disabled:opacity-50"
-          >
-            <Share2 size={18} />
-            {isSharing ? 'Creando...' : 'Compartir'}
-          </button>
-        )}
+      <div>
+        <h2 className="text-4xl font-extrabold text-gray-100">Bienvenido, {auth.currentUser?.displayName || auth.currentUser?.email}!</h2>
+        <p className="text-gray-400 mt-1">Este es el centro de mando de tu negocio de impresión 3D.</p>
       </div>
 
-      {/* Formulario para cambiar el nombre si es el de por defecto */}
-      {userName === 'Usuario' && !isReadOnly && (
-        <div className="p-4 bg-indigo-900/50 border border-indigo-700 rounded-lg">
-          <p className="text-sm text-indigo-200 mb-2">Parece que tu cuenta no tiene un nombre. ¡Asígnate uno!</p>
-          <form onSubmit={handleUpdateName} className="flex items-center gap-2">
-            <input 
-              type="text"
-              value={newDisplayName}
-              onChange={(e) => setNewDisplayName(e.target.value)}
-              placeholder="Escribe tu nombre"
-              className="flex-grow p-2 bg-gray-700 rounded-md text-white"
-            />
-            <button type="submit" className="flex items-center gap-2 px-4 py-2 bg-indigo-600 rounded-md hover:bg-indigo-500">
-              <Edit3 size={16} />
-              Guardar
-            </button>
-          </form>
-        </div>
-      )}
-
-      {shareableLink && (
-        <div className="p-4 bg-gray-700 rounded-lg flex items-center justify-between gap-4">
-          <p className="text-sm text-green-300 truncate">Enlace: <span className="font-mono">{shareableLink}</span></p>
-          <button onClick={copyToClipboard} className="p-2 bg-green-600 rounded-md hover:bg-green-500">
-            <Copy size={18} />
-          </button>
-        </div>
-      )}
-
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard 
-          icon={<DollarSign size={48} />} 
-          title="Ingresos Totales" 
-          value={`${stats.totalRevenue} €`}
-          gradient="bg-gradient-to-br from-green-500 to-emerald-600"
-        />
-        <StatCard 
-          icon={<User2 size={48} />} 
-          title="Total Clientes" 
-          value={clientCount}
-          gradient="bg-gradient-to-br from-blue-500 to-indigo-600"
-        />
-        <StatCard 
-          icon={<Briefcase size={48} />} 
-          title="En Proceso" 
-          value={stats.activeProjects}
-          gradient="bg-gradient-to-br from-purple-500 to-violet-600"
-        />
-        <StatCard 
-          icon={<Package size={48} />} 
-          title="Stock Total" 
-          value={`${stats.totalStockKg} kg`}
-          gradient="bg-gradient-to-br from-orange-500 to-red-600"
-        />
+        <StatCard icon={<DollarSign size={48} />} title="Ingresos Totales" value={`${totalRevenue} €`} gradient="bg-gradient-to-br from-green-500 to-emerald-600" />
+        <StatCard icon={<User2 size={48} />} title="Total Clientes" value={clientCount} gradient="bg-gradient-to-br from-blue-500 to-indigo-600" />
+        <StatCard icon={<Briefcase size={48} />} title="En Proceso" value={activeProjects} gradient="bg-gradient-to-br from-purple-500 to-violet-600" />
+        <StatCard icon={<Package size={48} />} title="Stock Total" value={`${totalStockKg} kg`} gradient="bg-gradient-to-br from-orange-500 to-red-600" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-xl font-bold text-white">Proyectos Recientes</h3>
-            <button onClick={() => alert('Navegar a la sección de proyectos')} className="text-sm text-blue-400 hover:text-blue-300 flex items-center gap-1">
-              Ver todos <ArrowRight size={14} />
-            </button>
-          </div>
+          <h3 className="text-xl font-bold text-white mb-4">Proyectos Recientes</h3>
           <div className="space-y-4">
             {recentProjects.length > 0 ? recentProjects.map(project => {
               const statusInfo = getStatusInfo(project.status);
               return (
                 <div key={project.id} className="grid grid-cols-3 md:grid-cols-4 items-center p-3 bg-gray-700/50 rounded-lg hover:bg-gray-700 transition-colors">
-                  <div className="col-span-2 md:col-span-2">
-                    <p className="font-bold text-white">{project.name}</p>
-                    <p className="text-xs text-gray-400">{project.client || 'Sin cliente'}</p>
-                  </div>
-                  <div className="flex items-center gap-2 justify-center">
-                    <div className={`w-2.5 h-2.5 rounded-full ${statusInfo.color}`}></div>
-                    <p className="text-sm text-gray-300">{statusInfo.text}</p>
-                  </div>
+                  <div className="col-span-2"><p className="font-bold text-white">{project.name}</p><p className="text-xs text-gray-400">{project.client || 'Sin cliente'}</p></div>
+                  <div className="flex items-center gap-2 justify-center"><div className={`w-2.5 h-2.5 rounded-full ${statusInfo.color}`}></div><p className="text-sm text-gray-300">{statusInfo.text}</p></div>
                   <p className="text-right font-semibold text-white hidden md:block">{project.budget ? `${project.budget} €` : 'N/A'}</p>
                 </div>
               );
-            }) : (
-              <p className="text-center text-gray-500 py-4">No hay proyectos recientes.</p>
-            )}
+            }) : <p className="text-center text-gray-500 py-4">No hay proyectos recientes.</p>}
           </div>
         </div>
 
         <div className="bg-gray-800/50 p-6 rounded-2xl border border-gray-700">
           <h3 className="text-xl font-bold text-white mb-4">Top 5 Materiales en Stock</h3>
           <div className="space-y-3">
-            {stats.topMaterials.length > 0 ? stats.topMaterials.map(material => (
+            {topMaterials.length > 0 ? topMaterials.map(material => (
               <div key={material.id} className="flex items-center justify-between p-3 bg-gray-700/50 rounded-lg">
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-full border-2 border-gray-600" style={{ backgroundColor: material.color }}></div>
-                  <div>
-                    <p className="font-semibold text-white">{material.name}</p>
-                    <p className="text-xs text-gray-400">{material.brand}</p>
-                  </div>
+                  <div><p className="font-semibold text-white">{material.name}</p><p className="text-xs text-gray-400">{material.brand}</p></div>
                 </div>
                 <p className="font-bold text-white">{(material.stockInGrams / 1000).toFixed(2)} kg</p>
               </div>
-            )) : (
-              <p className="text-center text-gray-500 py-4">No hay materiales en el inventario.</p>
-            )}
+            )) : <p className="text-center text-gray-500 py-4">No hay materiales en el inventario.</p>}
           </div>
         </div>
       </div>

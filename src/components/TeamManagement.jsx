@@ -1,61 +1,72 @@
-// src/components/TeamManagement.jsx
-// --- NUEVO COMPONENTE ---
-// Este componente permite a los propietarios y administradores gestionar los miembros del equipo.
+import React, { useState } from 'react';
+import { doc, updateDoc, arrayUnion } from 'firebase/firestore';
+import { db, auth } from '../firebase';
+import { UserPlus, Trash2, ShieldCheck } from 'lucide-react';
 
-import React, { useState, useEffect } from 'react';
-import { doc, updateDoc, onSnapshot } from 'firebase/firestore';
-import { db } from '../firebase'; // Asegúrate de que la ruta a tu config de firebase sea correcta
-
-// Componente para un solo miembro, permite cambiar rol o eliminar
-const MemberRow = ({ member, members, orgId, currentUserRole }) => {
-  const [currentRole, setCurrentRole] = useState(member.role);
+// --- Subcomponente para cada fila de miembro ---
+const MemberRow = ({ member, members, orgId, currentUserRole, addNotification }) => {
   const isSelf = member.uid === auth.currentUser.uid;
+  const isOwner = member.role === 'owner';
 
+  // Función para cambiar el rol de un miembro
   const handleRoleChange = async (newRole) => {
-    if (isSelf || currentUserRole !== 'owner') {
-        console.log("No puedes cambiar tu propio rol o no tienes permisos.");
-        return;
-    }
-    
-    setCurrentRole(newRole);
-    const updatedMembers = members.map(m => 
+    // Solo el 'owner' puede cambiar roles, y no puede cambiarse el suyo propio
+    if (currentUserRole !== 'owner' || isSelf) return;
+
+    const updatedMembers = members.map(m =>
       m.uid === member.uid ? { ...m, role: newRole } : m
     );
 
     const orgRef = doc(db, 'organizations', orgId);
-    await updateDoc(orgRef, { members: updatedMembers });
+    try {
+        await updateDoc(orgRef, { members: updatedMembers });
+        addNotification(`Rol de ${member.email} actualizado a ${newRole}.`, 'success');
+    } catch (error) {
+        addNotification('Error al actualizar el rol.', 'error');
+        console.error("Error updating role:", error);
+    }
   };
 
+  // Función para eliminar un miembro
   const handleRemoveMember = async () => {
-    if (isSelf || currentUserRole !== 'owner') {
-        console.log("No puedes eliminarte a ti mismo o no tienes permisos.");
-        return;
+    if (currentUserRole !== 'owner' || isSelf) return;
+    if (window.confirm(`¿Estás seguro de que quieres eliminar a ${member.email}?`)) {
+      const updatedMembers = members.filter(m => m.uid !== member.uid);
+      const updatedUIDs = updatedMembers.map(m => m.uid);
+      const orgRef = doc(db, 'organizations', orgId);
+      await updateDoc(orgRef, { members: updatedMembers, memberUIDs: updatedUIDs });
+      addNotification(`${member.email} ha sido eliminado del equipo.`, 'info');
     }
-    const updatedMembers = members.filter(m => m.uid !== member.uid);
-    const orgRef = doc(db, 'organizations', orgId);
-    await updateDoc(orgRef, { members: updatedMembers });
   };
 
   return (
     <div className="flex items-center justify-between p-3 bg-gray-800 rounded-lg mb-2">
-      <p className="text-white">{member.email}</p>
+      <div className="flex items-center">
+        {isOwner && <ShieldCheck className="text-yellow-400 mr-3" size={20} />}
+        <p className="text-white">{member.email} {isSelf && '(Tú)'}</p>
+      </div>
       <div className="flex items-center gap-4">
-        <select 
-          value={currentRole} 
-          onChange={(e) => handleRoleChange(e.target.value)}
-          className="bg-gray-700 text-white rounded px-2 py-1"
-          disabled={isSelf || currentUserRole !== 'owner'}
-        >
-          <option value="admin">Admin</option>
-          <option value="editor">Editor</option>
-          <option value="viewer">Viewer</option>
-        </select>
-        <button 
+        {isOwner ? (
+          <span className="px-2 py-1 text-xs font-bold text-yellow-300 bg-yellow-900/50 rounded-full">Propietario</span>
+        ) : (
+          // --- MENÚ DESPLEGABLE PARA CAMBIAR ROLES ---
+          <select
+            value={member.role}
+            onChange={(e) => handleRoleChange(e.target.value)}
+            className="bg-gray-700 text-white rounded px-2 py-1 border border-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={currentUserRole !== 'owner'} // Solo el owner puede cambiar roles
+          >
+            <option value="admin">Admin</option>
+            <option value="editor">Editor</option>
+            <option value="viewer">Viewer</option>
+          </select>
+        )}
+        <button
           onClick={handleRemoveMember}
-          className="bg-red-600 hover:bg-red-700 text-white font-bold py-1 px-3 rounded disabled:opacity-50"
-          disabled={isSelf || currentUserRole !== 'owner'}
+          className="text-gray-400 hover:text-red-500 disabled:opacity-30 disabled:cursor-not-allowed"
+          disabled={isOwner || currentUserRole !== 'owner'}
         >
-          Eliminar
+          <Trash2 size={18} />
         </button>
       </div>
     </div>
@@ -63,126 +74,58 @@ const MemberRow = ({ member, members, orgId, currentUserRole }) => {
 };
 
 
-// Componente principal de gestión de equipo
-const TeamManagement = ({ user }) => {
-  const [organization, setOrganization] = useState(null);
-  const [orgId, setOrgId] = useState(null);
+// --- Componente principal de Gestión de Equipo ---
+function TeamManagement({ user, organization, addNotification }) {
   const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteRole, setInviteRole] = useState('editor');
-  const [loading, setLoading] = useState(true);
-  const [currentUserRole, setCurrentUserRole] = useState('');
 
-  // Encontrar la organización del usuario actual
-  useEffect(() => {
-    if (!user) return;
-    
-    // Asumimos que el orgId se obtiene de alguna manera al iniciar sesión.
-    // Por simplicidad, aquí lo buscaremos, pero en una app real, esto debería ser más eficiente.
-    const q = query(collection(db, "organizations"), where("members", "array-contains", {uid: user.uid, email: user.email, role: "owner"})); // Esto es un ejemplo, necesitarás una lógica más robusta para encontrar la org
-    // La forma correcta es guardar el orgId en el custom token del usuario o en un documento de perfil.
-    // Por ahora, vamos a simular que lo encontramos.
-    
-    // SIMULACIÓN: Suponemos que el orgId se pasa como prop o se obtiene de un contexto.
-    // Para este ejemplo, necesitaremos un orgId de prueba.
-    const hardcodedOrgId = "YOUR_ORGANIZATION_ID"; // REEMPLAZA ESTO CON UN ID REAL DE TU FIRESTORE
-    setOrgId(hardcodedOrgId);
+  if (!organization) return <div className="text-center text-white">Cargando datos del equipo...</div>;
 
-    if (!hardcodedOrgId) {
-        setLoading(false);
-        return;
-    }
-
-    const orgRef = doc(db, 'organizations', hardcodedOrgId);
-    const unsubscribe = onSnapshot(orgRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const orgData = docSnap.data();
-        setOrganization(orgData);
-        const member = orgData.members.find(m => m.uid === user.uid);
-        setCurrentUserRole(member ? member.role : '');
-      } else {
-        console.log("No such organization!");
-      }
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [user]);
+  const currentUserRole = organization.members.find(m => m.uid === user.uid)?.role || '';
+  const orgId = organization.id;
 
   const handleInvite = async (e) => {
     e.preventDefault();
-    if (!inviteEmail || !organization || (currentUserRole !== 'owner' && currentUserRole !== 'admin')) {
-        alert("Email inválido o no tienes permisos.");
+    const emailToInvite = inviteEmail.trim().toLowerCase();
+    if (!emailToInvite || (currentUserRole !== 'owner' && currentUserRole !== 'admin')) {
+      addNotification("Email inválido o no tienes permisos.", 'error');
+      return;
+    }
+    if (organization.members.some(m => m.email === emailToInvite) || organization.pendingInvites?.includes(emailToInvite)) {
+        addNotification("Este usuario ya es miembro o tiene una invitación pendiente.", 'error');
         return;
     }
 
-    const newMember = {
-        // OJO: El UID no lo conocemos aún. El usuario invitado deberá completar su registro.
-        // Esta es una implementación simplificada. Un sistema real usaría Cloud Functions
-        // para enviar un email y crear un documento de "invitación" pendiente.
-        uid: `pending_${inviteEmail}`, // UID temporal
-        email: inviteEmail,
-        role: inviteRole
-    };
-
-    const orgRef = doc(db, 'organizations', orgId);
-    await updateDoc(orgRef, {
-        members: [...organization.members, newMember]
-    });
-
-    setInviteEmail('');
+    try {
+      const orgRef = doc(db, 'organizations', orgId);
+      await updateDoc(orgRef, {
+        pendingInvites: arrayUnion(emailToInvite)
+      });
+      addNotification(`Invitación enviada a ${emailToInvite}.`, 'success');
+      setInviteEmail('');
+    } catch (error) {
+      console.error("Error al enviar invitación:", error);
+      addNotification("No se pudo enviar la invitación.", 'error');
+    }
   };
-  
-  if (loading) {
-    return <div className="text-white">Cargando gestión de equipo...</div>;
-  }
 
-  if (!organization) {
-    return <div className="text-white">No perteneces a ninguna organización.</div>;
-  }
-  
   const canManage = currentUserRole === 'owner' || currentUserRole === 'admin';
 
   return (
-    <div className="p-6 bg-gray-900 text-white rounded-lg shadow-lg">
-      <h2 className="text-2xl font-bold mb-4">Gestionar Equipo</h2>
-      
+    <div>
+      <h2 className="text-3xl font-bold text-white mb-6">Gestionar Equipo</h2>
       {canManage && (
-        <form onSubmit={handleInvite} className="mb-6 flex flex-col sm:flex-row gap-3">
-          <input
-            type="email"
-            value={inviteEmail}
-            onChange={(e) => setInviteEmail(e.target.value)}
-            placeholder="Email del nuevo miembro"
-            className="flex-grow bg-gray-800 rounded p-2 border border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <select 
-            value={inviteRole}
-            onChange={(e) => setInviteRole(e.target.value)}
-            className="bg-gray-800 rounded p-2 border border-gray-700"
-          >
-            <option value="admin">Admin</option>
-            <option value="editor">Editor</option>
-            <option value="viewer">Viewer</option>
-          </select>
-          <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
-            Invitar
-          </button>
+        <form onSubmit={handleInvite} className="mb-8 flex flex-col sm:flex-row gap-3 bg-gray-800/50 border border-gray-700/50 p-4 rounded-lg">
+          <input type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="Email del nuevo miembro" className="flex-grow bg-gray-700 rounded p-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500" required />
+          <button type="submit" className="flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg"><UserPlus className="mr-2" size={20} />Invitar Miembro</button>
         </form>
       )}
-
       <div className="space-y-2">
         {organization.members.map(member => (
-          <MemberRow 
-            key={member.uid} 
-            member={member}
-            members={organization.members}
-            orgId={orgId}
-            currentUserRole={currentUserRole}
-          />
+          <MemberRow key={member.uid} member={member} members={organization.members} orgId={orgId} currentUserRole={currentUserRole} addNotification={addNotification} />
         ))}
       </div>
     </div>
   );
-};
+}
 
 export default TeamManagement;
