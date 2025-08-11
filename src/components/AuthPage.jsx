@@ -2,7 +2,8 @@
 
 import { useState } from 'react';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
-import { auth } from '../firebase';
+import { auth, db } from '../firebase'; // Asegúrate de importar 'db' de tu archivo de configuración de firebase
+import { collection, addDoc } from 'firebase/firestore'; // Importa las funciones de Firestore
 import { Mail, Lock, LogIn, UserPlus, User, AlertCircle } from 'lucide-react';
 
 const AuthPage = ({ addNotification }) => {
@@ -11,12 +12,12 @@ const AuthPage = ({ addNotification }) => {
   const [displayName, setDisplayName] = useState('');
   const [isRegistering, setIsRegistering] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState(''); // Nuevo estado para errores locales
+  const [error, setError] = useState('');
 
   const handleAuth = async (e) => {
     e.preventDefault();
     setIsLoading(true);
-    setError(''); // Limpiamos errores anteriores al iniciar
+    setError('');
 
     try {
       if (isRegistering) {
@@ -25,12 +26,26 @@ const AuthPage = ({ addNotification }) => {
           setIsLoading(false);
           return;
         }
-        
+
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
         await updateProfile(userCredential.user, {
           displayName: displayName,
         });
-        // La notificación de éxito global sigue siendo útil aquí
+
+        // Creamos un documento en la colección 'mail' para disparar el envío del correo.
+        await addDoc(collection(db, 'mail'), {
+          to: userCredential.user.email,
+          message: {
+            subject: `¡Bienvenido a 3D Print Manager, ${displayName}!`,
+            html: `<h1>¡Hola ${displayName}!</h1>
+                   <p>Te damos la bienvenida a 3D Print Manager. Estamos muy contentos de que te unas a nuestra comunidad.</p>
+                   <p>¡Empieza a gestionar tus proyectos de impresión 3D ahora mismo!</p>
+                   <br>
+                   <p>Saludos,</p>
+                   <p>El equipo de 3D Print Manager</p>`,
+          },
+        });
+
         addNotification('Cuenta creada con éxito. ¡Bienvenido!', 'success');
       } else {
         await signInWithEmailAndPassword(auth, email, password);
@@ -48,7 +63,7 @@ const AuthPage = ({ addNotification }) => {
       } else if (error.code === 'auth/weak-password') {
         friendlyMessage = 'La contraseña debe tener al menos 6 caracteres.';
       }
-      setError(friendlyMessage); // Usamos el estado local para mostrar el error
+      setError(friendlyMessage);
     } finally {
       setIsLoading(false);
     }
@@ -71,7 +86,6 @@ const AuthPage = ({ addNotification }) => {
             {isRegistering ? 'Crear Cuenta' : 'Iniciar Sesión'}
           </h2>
 
-          {/* Contenedor para mostrar el mensaje de error local */}
           {error && (
             <div className="bg-red-500/20 border border-red-500 text-red-300 p-3 rounded-lg flex items-center gap-2">
               <AlertCircle size={20} />
