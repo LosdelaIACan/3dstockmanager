@@ -1,216 +1,151 @@
-// src/App.jsx
-
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { collection, onSnapshot, query } from 'firebase/firestore';
-import { BarChart2, User2, Briefcase, DollarSign, LogOut, PieChart, Box } from 'lucide-react';
-import './App.css';
-
+import { collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
 import { auth, db } from './firebase';
+
+// Importa tus componentes de página/vista
 import AuthPage from './components/AuthPage';
 import DashboardOverview from './components/DashboardOverview';
-import ClientManagement from './components/ClientManagement';
 import ProjectManagement from './components/ProjectManagement';
-import PricingCalculator from './components/PricingCalculator';
-import NotificationBell from './components/NotificationBell';
-import Analytics from './components/Analytics';
+import TeamManagement from './components/TeamManagement'; // El nuevo componente
 import MaterialManagement from './components/MaterialManagement';
-// Paleta de colores unificada para la navegación y el dashboard
-const navButtonStyles = {
-  dashboard: {
-    base: 'hover:bg-orange-700',
-    active: 'bg-gradient-to-r from-orange-500 to-red-600 shadow-lg ring-2 ring-orange-400/50',
-    icon: BarChart2,
-  },
-  clients: {
-    base: 'hover:bg-blue-700',
-    active: 'bg-gradient-to-r from-blue-500 to-indigo-600 shadow-lg ring-2 ring-blue-400/50',
-    icon: User2,
-  },
-  projects: {
-    base: 'hover:bg-purple-700',
-    active: 'bg-gradient-to-r from-purple-500 to-violet-600 shadow-lg ring-2 ring-purple-400/50',
-    icon: Briefcase,
-  },
-  pricing: {
-    base: 'hover:bg-green-700',
-    active: 'bg-gradient-to-r from-green-500 to-emerald-600 shadow-lg ring-2 ring-green-400/50',
-    icon: DollarSign,
-  },
-  analytics: {
-    base: 'hover:bg-pink-700',
-    active: 'bg-gradient-to-r from-pink-500 to-rose-600 shadow-lg ring-2 ring-pink-400/50',
-    icon: PieChart,
-  },
-  materials: {
-    base: 'hover:bg-orange-700',
-    active: 'bg-gradient-to-r from-orange-500 to-red-600 shadow-lg ring-2 ring-orange-400/50',
-    icon: Box,
-  },
-};
+import ClientManagement from './components/ClientManagement';
+import PricingCalculator from './components/PricingCalculator';
+import Analytics from './components/Analytics';
+import NotificationBell from './components/NotificationBell';
+
+// Iconos para el sidebar (puedes usar los que prefieras)
+import { Home, Folder, Users, Package, Briefcase, DollarSign, BarChart2, LogOut } from 'lucide-react';
+
 
 function App() {
-  const [userId, setUserId] = useState(null);
-  const [userName, setUserName] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
-  const [activeSection, setActiveSection] = useState('dashboard');
-  const [notifications, setNotifications] = useState([]);
-  const [clients, setClients] = useState([]);
-  const [projects, setProjects] = useState([]);
-  const [materials, setMaterials] = useState([]);
-  
-  const notifiedMaterialsRef = useRef([]);
-
-  // Establecer el título de la página
-  useEffect(() => {
-    document.title = '3D Print Manager';
-  }, []);
+  const [user, setUser] = useState(null);
+  const [userOrg, setUserOrg] = useState(null); // Estado para guardar la organización del usuario
+  const [userRole, setUserRole] = useState(''); // Estado para guardar el rol del usuario
+  const [loading, setLoading] = useState(true); // Estado de carga para la sesión inicial
+  const [view, setView] = useState('overview'); // Estado para controlar qué vista se muestra
 
   useEffect(() => {
-    const savedNotifications = localStorage.getItem('notifications');
-    if (savedNotifications) {
-      setNotifications(JSON.parse(savedNotifications));
-    }
-  }, []);
+    // onAuthStateChanged es un listener que se ejecuta cuando el usuario inicia o cierra sesión
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (currentUser) {
+        // 1. Si hay un usuario, lo guardamos en el estado
+        setUser(currentUser);
+        
+        // 2. Buscamos la organización a la que pertenece el usuario
+        // Esta consulta busca en la colección 'organizations' un documento donde el array 'members'
+        // contenga un objeto con el UID del usuario actual.
+        const orgsQuery = query(
+          collection(db, 'organizations'),
+          where('members', 'array-contains-any', [{uid: currentUser.uid}]) // Esto puede requerir un índice compuesto
+        );
 
-  useEffect(() => {
-    localStorage.setItem('notifications', JSON.stringify(notifications));
-  }, [notifications]);
-  
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        setUserId(user.uid);
-        setUserName(user.displayName || 'Usuario');
-        notifiedMaterialsRef.current = [];
-      } else {
-        setUserId(null);
-        setUserName('');
-      }
-      setIsLoading(false);
-    });
-    return () => unsubscribe();
-  }, []);
+        // Una forma más robusta si la anterior no funciona bien con arrays de objetos complejos
+        const orgsRef = collection(db, "organizations");
+        const snapshot = await getDocs(orgsRef);
+        let foundOrg = null;
+        let foundRole = '';
 
-  const addNotification = useCallback((message, type) => {
-    setNotifications(prev => [...prev, { id: Date.now(), message, type }]);
-  }, []);
+        snapshot.forEach(doc => {
+            const orgData = doc.data();
+            const member = orgData.members.find(m => m.uid === currentUser.uid);
+            if(member) {
+                foundOrg = { id: doc.id, ...orgData };
+                foundRole = member.role;
+            }
+        });
 
-  useEffect(() => {
-    if (!userId || !db) return;
-    const clientCollectionPath = `/artifacts/default-app-id/users/${userId}/clients`;
-    const q = query(collection(db, clientCollectionPath));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const clientsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setClients(clientsData);
-    });
-    return () => unsubscribe();
-  }, [userId]);
-  
-  useEffect(() => {
-    if (!userId || !db) return;
-    const projectCollectionPath = `/artifacts/default-app-id/users/${userId}/projects`;
-    const q = query(collection(db, projectCollectionPath));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const projectsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setProjects(projectsData);
-    });
-    return () => unsubscribe();
-  }, [userId]);
-  
-  useEffect(() => {
-    if (!userId) return;
-    const materialsCollectionPath = `/artifacts/default-app-id/users/${userId}/materials`;
-    const q = query(collection(db, materialsCollectionPath));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const materialsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setMaterials(materialsData);
-
-      materialsData.forEach(material => {
-        const isLowStock = material.stockInGrams < material.reorderThreshold;
-        const hasBeenNotified = notifiedMaterialsRef.current.includes(material.id);
-
-        if (isLowStock && !hasBeenNotified) {
-          addNotification(`¡Alerta! Stock bajo para ${material.brand} ${material.name} (${material.stockInGrams}g).`, 'error');
-          notifiedMaterialsRef.current.push(material.id);
+        if (foundOrg) {
+          setUserOrg(foundOrg);
+          setUserRole(foundRole);
         }
-      });
-    });
-    return () => unsubscribe();
-  }, [userId, addNotification]);
 
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-    } catch (error) {
-      console.error('Error al cerrar sesión:', error);
+      } else {
+        // Si no hay usuario, reseteamos todos los estados
+        setUser(null);
+        setUserOrg(null);
+        setUserRole('');
+      }
+      // 3. Terminamos el estado de carga
+      setLoading(false);
+    });
+
+    // Limpiamos el listener cuando el componente se desmonta para evitar fugas de memoria
+    return () => unsubscribe();
+  }, []);
+
+  const handleSignOut = () => {
+    signOut(auth).catch((error) => console.error('Error signing out: ', error));
+  };
+
+  // Función para renderizar el componente principal según la vista seleccionada
+  const renderContent = () => {
+    if (!userOrg) {
+      return <div className="text-white">Cargando datos de la organización...</div>;
+    }
+
+    switch (view) {
+      case 'overview':
+        return <DashboardOverview />;
+      case 'projects':
+        // Pasamos el ID de la organización y el rol del usuario para gestionar permisos
+        return <ProjectManagement orgId={userOrg.id} userRole={userRole} />;
+      case 'team':
+        // Pasamos el usuario y la organización completa para gestionar miembros
+        return <TeamManagement user={user} organization={userOrg} />;
+      case 'materials':
+        return <MaterialManagement />;
+      case 'clients':
+        return <ClientManagement />;
+      case 'calculator':
+        return <PricingCalculator />;
+      case 'analytics':
+        return <Analytics />;
+      default:
+        return <DashboardOverview />;
     }
   };
 
-  const clearNotifications = () => {
-    setNotifications([]);
-  };
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-900 text-white">
-        Cargando...
-      </div>
-    );
+  if (loading) {
+    return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">Cargando...</div>;
   }
 
-  if (!userId) {
-    return <AuthPage addNotification={addNotification} />;
+  if (!user) {
+    return <AuthPage />;
   }
 
   return (
-    <div className="bg-gray-900 min-h-screen flex flex-col font-sans text-white">
-      <nav className="bg-gray-800/70 backdrop-blur-lg p-4 shadow-2xl fixed top-0 w-full z-20 border-b border-gray-700">
-        <div className="container mx-auto flex flex-col sm:flex-row items-center justify-between">
-          <h1 className="text-2xl font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-cyan-300 mb-4 sm:mb-0">
-            3D Print Manager
-          </h1>
-          <div className="flex flex-wrap justify-center items-center gap-2">
-            {Object.entries(navButtonStyles).map(([section, styles]) => {
-              const Icon = styles.icon;
-              return (
-                <button
-                  key={section}
-                  onClick={() => setActiveSection(section)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold transition-all duration-300 ease-in-out transform hover:scale-105 focus:outline-none ${
-                    activeSection === section
-                      ? styles.active
-                      : `text-gray-300 ${styles.base}`
-                  }`}
-                >
-                  <Icon size={18} />
-                  {section.charAt(0).toUpperCase() + section.slice(1)}
-                </button>
-              );
-            })}
-          </div>
-          <div className="flex items-center gap-4 mt-4 sm:mt-0">
-            <NotificationBell notifications={notifications} onClear={clearNotifications} />
-            <button
-              onClick={handleLogout}
-              className="p-2.5 rounded-full text-gray-300 bg-gray-700 hover:bg-red-600 hover:text-white transition-colors focus:outline-none"
-            >
-              <LogOut size={20} />
-            </button>
-          </div>
+    <div className="flex h-screen bg-gray-900 text-white">
+      {/* Sidebar */}
+      <aside className="w-64 bg-gray-800 p-4 flex flex-col">
+        <div className="text-2xl font-bold mb-8">3D Stock Manager</div>
+        <nav className="flex flex-col space-y-2">
+          <button onClick={() => setView('overview')} className={`flex items-center p-2 rounded ${view === 'overview' ? 'bg-blue-600' : ''}`}><Home className="mr-3" /> Resumen</button>
+          <button onClick={() => setView('projects')} className={`flex items-center p-2 rounded ${view === 'projects' ? 'bg-blue-600' : ''}`}><Folder className="mr-3" /> Proyectos</button>
+          <button onClick={() => setView('team')} className={`flex items-center p-2 rounded ${view === 'team' ? 'bg-blue-600' : ''}`}><Users className="mr-3" /> Equipo</button>
+          <button onClick={() => setView('materials')} className={`flex items-center p-2 rounded ${view === 'materials' ? 'bg-blue-600' : ''}`}><Package className="mr-3" /> Materiales</button>
+          <button onClick={() => setView('clients')} className={`flex items-center p-2 rounded ${view === 'clients' ? 'bg-blue-600' : ''}`}><Briefcase className="mr-3" /> Clientes</button>
+          <button onClick={() => setView('calculator')} className={`flex items-center p-2 rounded ${view === 'calculator' ? 'bg-blue-600' : ''}`}><DollarSign className="mr-3" /> Calculadora</button>
+          <button onClick={() => setView('analytics')} className={`flex items-center p-2 rounded ${view === 'analytics' ? 'bg-blue-600' : ''}`}><BarChart2 className="mr-3" /> Analíticas</button>
+        </nav>
+        <div className="mt-auto">
+           <button onClick={handleSignOut} className="flex items-center w-full p-2 rounded hover:bg-red-600"><LogOut className="mr-3" /> Cerrar Sesión</button>
         </div>
-      </nav>
+      </aside>
 
-      <main className="flex-1 p-8 pt-32 sm:pt-28">
-        <div className="w-full max-w-7xl mx-auto space-y-8">
-          {activeSection === 'dashboard' && <DashboardOverview userName={userName} clientCount={clients.length} projects={projects} materials={materials} />}
-          {activeSection === 'clients' && <ClientManagement userId={userId} addNotification={addNotification} />}
-          {activeSection === 'projects' && <ProjectManagement userId={userId} clients={clients} addNotification={addNotification} />}
-          {activeSection === 'pricing' && <PricingCalculator projects={projects} materials={materials} userId={userId} addNotification={addNotification} />}
-          {activeSection === 'analytics' && <Analytics projects={projects} />}
-          {activeSection === 'materials' && <MaterialManagement userId={userId} addNotification={addNotification} />}
-        </div>
-      </main>
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col">
+        <header className="bg-gray-800 p-4 flex justify-end items-center">
+            <NotificationBell />
+            <div className="ml-4">
+                <p className="font-semibold">{user.email}</p>
+                <p className="text-xs text-gray-400">Rol: {userRole}</p>
+            </div>
+        </header>
+        <main className="flex-1 p-6 overflow-y-auto">
+          {renderContent()}
+        </main>
+      </div>
     </div>
   );
 }
