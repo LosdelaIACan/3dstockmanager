@@ -3,35 +3,33 @@ import { doc, updateDoc, arrayUnion, arrayRemove, collection, addDoc, serverTime
 import { db } from '../firebase';
 import { Users, PlusCircle } from 'lucide-react';
 
-const InvitationScreen = ({ user, invitation, onDecision }) => {
+const InvitationScreen = ({ user, invitation, onDecision, isUnassignedUser = false }) => {
 
-  // Función para aceptar la invitación
   const handleAccept = async () => {
     const orgRef = doc(db, 'organizations', invitation.orgId);
     try {
-      // Se actualiza la organización para añadir al nuevo miembro
       await updateDoc(orgRef, {
-        members: arrayUnion({ uid: user.uid, email: user.email, role: 'viewer' }), // Rol por defecto para invitados
+        members: arrayUnion({ uid: user.uid, email: user.email, role: 'viewer' }),
         memberUIDs: arrayUnion(user.uid),
-        pendingInvites: arrayRemove(user.email) // Se elimina la invitación pendiente
+        pendingInvites: arrayRemove(user.email)
       });
-      // Se notifica a App.jsx que se ha tomado una decisión para que recargue el estado del usuario
       onDecision();
     } catch (error) {
       console.error("Error al aceptar la invitación:", error);
     }
   };
 
-  // Función para rechazar la invitación y crear una nueva organización
   const handleDeclineAndCreate = async () => {
+    if (isUnassignedUser) {
+        onDecision();
+        return;
+    }
     const orgRef = doc(db, 'organizations', invitation.orgId);
     try {
-      // 1. Se rechaza la invitación (se elimina de la lista de pendientes)
       await updateDoc(orgRef, {
         pendingInvites: arrayRemove(user.email)
       });
 
-      // 2. Se crea una nueva organización para el usuario
       const newOrgRef = collection(db, 'organizations');
       await addDoc(newOrgRef, {
           ownerId: user.uid,
@@ -41,13 +39,42 @@ const InvitationScreen = ({ user, invitation, onDecision }) => {
           pendingInvites: [],
           createdAt: serverTimestamp()
       });
-      // Se notifica a App.jsx para que recargue el estado del usuario
       onDecision();
     } catch (error) {
       console.error("Error al rechazar y crear organización:", error);
     }
   };
 
+  if (isUnassignedUser) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center p-8 bg-gray-800/50 border border-gray-700/50 rounded-xl shadow-2xl w-full max-w-lg mx-auto">
+          <h2 className="text-3xl font-bold mb-4 text-white">¡Bienvenido!</h2>
+          <p className="text-gray-400 mb-8">
+            Parece que no tienes una organización asignada. Puedes crear una nueva o esperar una invitación.
+          </p>
+          <div className="space-y-4">
+            <button 
+              onClick={handleDeclineAndCreate} 
+              className="w-full p-4 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition-all flex items-center justify-center gap-2 text-lg"
+            >
+              <PlusCircle size={20} />
+              Crear Mi Propia Organización
+            </button>
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full p-4 bg-gray-600 text-white font-bold rounded-lg hover:bg-gray-500 transition-all flex items-center justify-center gap-2"
+            >
+              <Users size={20} />
+              Esperar una Invitación
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Código original para invitaciones
   return (
     <div className="flex items-center justify-center h-full">
       <div className="text-center p-8 bg-gray-800/50 border border-gray-700/50 rounded-xl shadow-2xl w-full max-w-lg mx-auto">

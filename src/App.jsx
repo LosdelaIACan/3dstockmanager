@@ -3,7 +3,6 @@ import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { collection, query, where, getDocs, addDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from './firebase';
 
-// Importa tus componentes de página/vista
 import AuthPage from './components/AuthPage';
 import DashboardOverview from './components/DashboardOverview';
 import ProjectManagement from './components/ProjectManagement';
@@ -16,10 +15,8 @@ import NotificationBell from './components/NotificationBell';
 import ExpenseManagement from './components/ExpenseManagement';
 import InvitationScreen from './components/InvitationScreen';
 
-// Iconos para el sidebar
 import { Home, Folder, Users, Package, Briefcase, BarChart2, LogOut, Info, CheckCircle, XCircle, Calculator, CreditCard } from 'lucide-react';
 
-// --- NUEVO: Definición de Roles y Permisos ---
 const ROLES = {
   OWNER: 'owner',
   ADMIN: 'admin',
@@ -31,7 +28,7 @@ const PERMISSIONS = {
   [ROLES.OWNER]: ['overview', 'projects', 'team', 'materials', 'clients', 'expenses', 'calculator', 'analytics'],
   [ROLES.ADMIN]: ['overview', 'projects', 'team', 'materials', 'clients', 'expenses', 'calculator', 'analytics'],
   [ROLES.EDITOR]: ['overview', 'projects', 'materials', 'clients', 'expenses', 'calculator', 'analytics'],
-  [ROLES.VIEWER]: ['overview', 'projects', 'materials', 'clients', 'expenses', 'calculator', 'analytics'], // Verán los componentes pero con acciones deshabilitadas
+  [ROLES.VIEWER]: ['overview', 'projects', 'materials', 'clients', 'expenses', 'calculator', 'analytics'],
 };
 
 const NAV_ITEMS = [
@@ -46,7 +43,6 @@ const NAV_ITEMS = [
 ];
 
 
-// Componente para mostrar notificaciones emergentes
 const NotificationPopup = ({ notification }) => {
   const iconMap = {
     success: <CheckCircle className="text-green-400" />,
@@ -62,12 +58,12 @@ const NotificationPopup = ({ notification }) => {
   );
 };
 
-
 function App() {
   const [user, setUser] = useState(null);
   const [userOrg, setUserOrg] = useState(null);
   const [userRole, setUserRole] = useState('');
-  const [pendingInvitation, setPendingInvitation] = useState(null); // Estado para la invitación
+  const [pendingInvitation, setPendingInvitation] = useState(null);
+  const [isUnassignedUser, setIsUnassignedUser] = useState(false);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('overview');
   const [notification, setNotification] = useState(null);
@@ -84,18 +80,34 @@ function App() {
         setUserOrg(null);
         setUserRole('');
         setPendingInvitation(null);
+        setIsUnassignedUser(false);
         setLoading(false);
       }
     });
     return () => authUnsubscribe();
   }, []);
 
-  // Función centralizada para comprobar el estado del usuario (organización e invitaciones)
+  const handleCreateNewOrganization = async () => {
+    if (!user) return;
+    try {
+      const newOrgRef = collection(db, 'organizations');
+      await addDoc(newOrgRef, {
+          ownerId: user.uid, name: `${user.email.split('@')[0]}'s Team`,
+          members: [{ uid: user.uid, email: user.email, role: 'owner' }],
+          memberUIDs: [user.uid], createdAt: serverTimestamp(), pendingInvites: []
+      });
+      addNotification('¡Tu nueva organización ha sido creada!', 'success');
+      await checkUserStatus(user);
+    } catch (e) {
+      console.error('Error al crear organización:', e);
+      addNotification('Error al crear la organización.', 'error');
+    }
+  };
+
   const checkUserStatus = async (currentUser) => {
     if (!currentUser) return;
     setLoading(true);
 
-    // 1. Comprobar si ya pertenece a una organización
     let orgQuery = query(collection(db, "organizations"), where("memberUIDs", "array-contains", currentUser.uid));
     let orgSnapshot = await getDocs(orgQuery);
 
@@ -106,29 +118,29 @@ function App() {
       setUserOrg(orgData);
       setUserRole(memberInfo.role);
       setPendingInvitation(null);
+      setIsUnassignedUser(false);
       setLoading(false);
       return;
     }
 
-    // 2. Si no, comprobar si tiene invitaciones pendientes
     orgQuery = query(collection(db, "organizations"), where("pendingInvites", "array-contains", currentUser.email));
     orgSnapshot = await getDocs(orgQuery);
 
     if (!orgSnapshot.empty) {
       const orgDoc = orgSnapshot.docs[0];
       setPendingInvitation({ orgId: orgDoc.id, orgName: orgDoc.data().name });
+      setIsUnassignedUser(false);
       setLoading(false);
       return;
     }
 
-    // 3. Si no tiene ni organización ni invitación, es un usuario nuevo y creamos su propia organización
-    const newOrgRef = collection(db, 'organizations');
-    await addDoc(newOrgRef, {
-        ownerId: currentUser.uid, name: `${currentUser.email.split('@')[0]}'s Team`,
-        members: [{ uid: currentUser.uid, email: currentUser.email, role: 'owner' }],
-        memberUIDs: [currentUser.uid], createdAt: serverTimestamp(), pendingInvites: []
-    });
-    await checkUserStatus(currentUser); // Volvemos a comprobar para cargar la nueva organización
+    // Si el usuario no está en una organización ni tiene invitaciones pendientes,
+    // establecemos el estado para mostrar la pantalla de elección.
+    setPendingInvitation(null);
+    setUserOrg(null);
+    setUserRole('');
+    setIsUnassignedUser(true);
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -142,7 +154,12 @@ function App() {
   };
 
   const renderContent = () => {
-    // Si hay una invitación pendiente, se muestra la pantalla de invitación
+    // Si el usuario está "sin asignar", mostramos la pantalla de elección.
+    if (isUnassignedUser) {
+        return <InvitationScreen user={user} onDecision={handleCreateNewOrganization} isUnassignedUser={true} />;
+    }
+    
+    // Si hay una invitación pendiente, mostramos la pantalla de invitación.
     if (pendingInvitation) {
       return <InvitationScreen user={user} invitation={pendingInvitation} onDecision={() => checkUserStatus(user)} />;
     }
@@ -169,15 +186,14 @@ function App() {
   }
 
   if (!user) {
-    return <AuthPage />;
+    return <AuthPage checkUserStatus={checkUserStatus} />;
   }
   
   const userPermissions = PERMISSIONS[userRole] || [];
 
   return (
     <div className="flex h-screen bg-gray-900 text-white font-sans">
-      {/* Si hay una invitación pendiente, no mostramos la interfaz principal */}
-      {!pendingInvitation && (
+      {!isUnassignedUser && !pendingInvitation && (
         <aside className="w-64 bg-gray-800 p-5 flex flex-col shrink-0">
           <div className="flex items-center mb-10">
             <img src="/logo.png" alt="Logo" className="h-8 w-8 mr-3"/>
@@ -185,9 +201,8 @@ function App() {
           </div>
           <nav className="flex flex-col space-y-2">
             {NAV_ITEMS.map(item => {
-                // --- LÓGICA DE PERMISOS APLICADA AQUÍ ---
                 if (!userPermissions.includes(item.id)) {
-                    return null; // Si el usuario no tiene permiso, no se renderiza el botón
+                    return null;
                 }
                 const Icon = item.icon;
                 return (
@@ -208,7 +223,7 @@ function App() {
       )}
 
       <div className="flex-1 flex flex-col overflow-hidden">
-        {!pendingInvitation && (
+        {!isUnassignedUser && !pendingInvitation && (
           <header className="bg-gray-900/50 backdrop-blur-sm p-4 flex justify-end items-center border-b border-gray-700/50">
               <NotificationBell orgId={userOrg?.id} />
               <div className="ml-4 text-right">

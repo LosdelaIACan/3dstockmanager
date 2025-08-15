@@ -1,16 +1,13 @@
 import React, { useState } from 'react';
-import { doc, updateDoc, arrayUnion } from 'firebase/firestore';
+import { doc, updateDoc, arrayUnion, collection, getDocs, deleteDoc, query, writeBatch, arrayRemove } from 'firebase/firestore';
 import { db, auth } from '../firebase';
-import { UserPlus, Trash2, ShieldCheck } from 'lucide-react';
+import { UserPlus, Trash2, ShieldCheck, AlertCircle } from 'lucide-react';
 
-// --- Subcomponente para cada fila de miembro ---
 const MemberRow = ({ member, members, orgId, currentUserRole, addNotification }) => {
   const isSelf = member.uid === auth.currentUser.uid;
   const isOwner = member.role === 'owner';
 
-  // Función para cambiar el rol de un miembro
   const handleRoleChange = async (newRole) => {
-    // Solo el 'owner' puede cambiar roles, y no puede cambiarse el suyo propio
     if (currentUserRole !== 'owner' || isSelf) return;
 
     const updatedMembers = members.map(m =>
@@ -27,7 +24,6 @@ const MemberRow = ({ member, members, orgId, currentUserRole, addNotification })
     }
   };
 
-  // Función para eliminar un miembro
   const handleRemoveMember = async () => {
     if (currentUserRole !== 'owner' || isSelf) return;
     if (window.confirm(`¿Estás seguro de que quieres eliminar a ${member.email}?`)) {
@@ -49,12 +45,11 @@ const MemberRow = ({ member, members, orgId, currentUserRole, addNotification })
         {isOwner ? (
           <span className="px-2 py-1 text-xs font-bold text-yellow-300 bg-yellow-900/50 rounded-full">Propietario</span>
         ) : (
-          // --- MENÚ DESPLEGABLE PARA CAMBIAR ROLES ---
           <select
             value={member.role}
             onChange={(e) => handleRoleChange(e.target.value)}
             className="bg-gray-700 text-white rounded px-2 py-1 border border-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
-            disabled={currentUserRole !== 'owner'} // Solo el owner puede cambiar roles
+            disabled={currentUserRole !== 'owner'}
           >
             <option value="admin">Admin</option>
             <option value="editor">Editor</option>
@@ -73,10 +68,10 @@ const MemberRow = ({ member, members, orgId, currentUserRole, addNotification })
   );
 };
 
-
-// --- Componente principal de Gestión de Equipo ---
-function TeamManagement({ user, organization, addNotification }) {
+const TeamManagement = ({ user, organization, addNotification }) => {
   const [inviteEmail, setInviteEmail] = useState('');
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [confirmationText, setConfirmationText] = useState('');
 
   if (!organization) return <div className="text-center text-white">Cargando datos del equipo...</div>;
 
@@ -108,7 +103,44 @@ function TeamManagement({ user, organization, addNotification }) {
     }
   };
 
+  const deleteCollection = async (collectionPath) => {
+    const batch = writeBatch(db);
+    const collectionRef = collection(db, collectionPath);
+    const q = query(collectionRef);
+    const snapshot = await getDocs(q);
+
+    snapshot.docs.forEach((doc) => {
+      batch.delete(doc.ref);
+    });
+    await batch.commit();
+  };
+
+  const handleDeleteOrganization = async () => {
+    if (currentUserRole !== 'owner') {
+        addNotification("Solo el propietario puede eliminar la organización.", 'error');
+        return;
+    }
+
+    try {
+      const orgRef = doc(db, 'organizations', orgId);
+
+      await deleteCollection(`organizations/${orgId}/projects`);
+      await deleteCollection(`organizations/${orgId}/materials`);
+      await deleteCollection(`organizations/${orgId}/clients`);
+      await deleteCollection(`organizations/${orgId}/expenses`);
+      
+      await deleteDoc(orgRef);
+      addNotification('Organización eliminada con éxito.', 'success');
+      setShowDeleteModal(false);
+      window.location.reload();
+    } catch (error) {
+      console.error("Error al eliminar la organización:", error);
+      addNotification("Error al eliminar la organización.", 'error');
+    }
+  };
+
   const canManage = currentUserRole === 'owner' || currentUserRole === 'admin';
+  const isOwner = currentUserRole === 'owner';
 
   return (
     <div>
@@ -124,8 +156,46 @@ function TeamManagement({ user, organization, addNotification }) {
           <MemberRow key={member.uid} member={member} members={organization.members} orgId={orgId} currentUserRole={currentUserRole} addNotification={addNotification} />
         ))}
       </div>
+
+      {isOwner && (
+        <div className="mt-8 pt-6 border-t border-gray-700 flex justify-between items-center">
+          <h3 className="text-xl font-bold text-red-500">Zona de Peligro</h3>
+          <button
+            onClick={() => setShowDeleteModal(true)}
+            className="p-2 text-sm bg-red-600 text-white font-bold rounded-lg shadow-md hover:bg-red-700 transition-colors flex items-center justify-center gap-1"
+          >
+            <Trash2 size={16} /> Eliminar Organización
+          </button>
+        </div>
+
+      )}
+
+      {showDeleteModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
+          <div className="bg-gray-800 p-6 rounded-lg shadow-2xl max-w-sm w-full space-y-4">
+            <h2 className="text-xl font-bold text-white flex items-center gap-2"><AlertCircle className="text-red-500" />Confirmar Eliminación</h2>
+            <p className="text-gray-400">Para confirmar, escribe el nombre de la organización "<span className="font-bold text-white">{organization.name}</span>" a continuación.</p>
+            <input 
+                type="text"
+                value={confirmationText}
+                onChange={(e) => setConfirmationText(e.target.value)}
+                className="w-full p-3 bg-gray-700 rounded-lg border border-gray-600"
+            />
+            <div className="flex justify-end gap-3">
+              <button onClick={() => setShowDeleteModal(false)} className="px-4 py-2 bg-gray-600 rounded-lg hover:bg-gray-500">Cancelar</button>
+              <button 
+                onClick={handleDeleteOrganization} 
+                className="px-4 py-2 text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={confirmationText !== organization.name}
+              >
+                Eliminar para siempre
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
-}
+};
 
 export default TeamManagement;
