@@ -15,7 +15,7 @@ import NotificationBell from './components/NotificationBell';
 import ExpenseManagement from './components/ExpenseManagement';
 import InvitationScreen from './components/InvitationScreen';
 
-import { Home, Folder, Users, Package, Briefcase, BarChart2, LogOut, Info, CheckCircle, XCircle, Calculator, CreditCard } from 'lucide-react';
+import { Home, Folder, Users, Package, Briefcase, BarChart2, LogOut, Info, CheckCircle, XCircle, Calculator, CreditCard, Menu, X } from 'lucide-react';
 
 const ROLES = {
   OWNER: 'owner',
@@ -67,6 +67,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('overview');
   const [notification, setNotification] = useState(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const addNotification = (message, type = 'info') => {
     setNotification({ message, type });
@@ -152,6 +153,11 @@ function App() {
   const handleSignOut = () => {
     signOut(auth).catch((error) => console.error('Error signing out: ', error));
   };
+  
+  const handleViewChange = (newView) => {
+    setView(newView);
+    setIsSidebarOpen(false); // Cierra el menú en móviles después de seleccionar una vista
+  };
 
   const renderContent = () => {
     // Si el usuario está "sin asignar", mostramos la pantalla de elección.
@@ -194,10 +200,17 @@ function App() {
   return (
     <div className="flex h-screen bg-gray-900 text-white font-sans">
       {!isUnassignedUser && !pendingInvitation && (
-        <aside className="w-64 bg-gray-800 p-5 flex flex-col shrink-0">
-          <div className="flex items-center mb-10">
-            <img src="/logo.png" alt="Logo" className="h-8 w-8 mr-3"/>
-            <span className="text-xl font-bold">3D Stock Manager</span>
+        <>
+        {/* Barra lateral - Oculta en pantallas pequeñas, se muestra si isSidebarOpen es true */}
+        <aside className={`fixed z-50 lg:relative w-64 bg-gray-800 p-5 flex flex-col shrink-0 transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} transition-transform duration-300 lg:translate-x-0`}>
+          <div className="flex items-center justify-between lg:justify-start mb-10">
+            <div className="flex items-center">
+              <img src="/logo.png" alt="Logo" className="h-8 w-8 mr-3"/>
+              <span className="text-xl font-bold">3D Stock Manager</span>
+            </div>
+            <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden p-2 text-gray-400 hover:text-white">
+              <X size={24} />
+            </button>
           </div>
           <nav className="flex flex-col space-y-2">
             {NAV_ITEMS.map(item => {
@@ -208,7 +221,7 @@ function App() {
                 return (
                     <button 
                         key={item.id}
-                        onClick={() => setView(item.id)} 
+                        onClick={() => handleViewChange(item.id)} 
                         className={`flex items-center p-3 rounded-lg transition-colors ${view === item.id ? 'bg-blue-600' : 'hover:bg-gray-700'}`}
                     >
                         <Icon className="mr-4" size={20} /> {item.label}
@@ -220,22 +233,29 @@ function App() {
              <button onClick={handleSignOut} className="flex items-center w-full p-3 rounded-lg hover:bg-red-600/80 transition-colors"><LogOut className="mr-4" size={20} /> Cerrar Sesión</button>
           </div>
         </aside>
-      )}
 
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {!isUnassignedUser && !pendingInvitation && (
-          <header className="bg-gray-900/50 backdrop-blur-sm p-4 flex justify-end items-center border-b border-gray-700/50">
-              <NotificationBell orgId={userOrg?.id} />
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Encabezado con el botón de hamburguesa */}
+          <header className="bg-gray-900/50 backdrop-blur-sm p-4 flex justify-between items-center border-b border-gray-700/50 lg:justify-end">
+              <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 text-gray-400 hover:text-white">
+                <Menu size={24} />
+              </button>
               <div className="ml-4 text-right">
                   <p className="font-semibold text-sm">{user.email}</p>
                   <p className="text-xs text-gray-400 capitalize">{userOrg?.name || 'Personal'} - {userRole}</p>
               </div>
           </header>
-        )}
-        <main className="flex-1 p-6 lg:p-8 overflow-y-auto">
-          {renderContent()}
-        </main>
-      </div>
+          <main className="flex-1 p-6 lg:p-8 overflow-y-auto">
+            {renderContent()}
+          </main>
+        </div>
+        </>
+      )}
+      {isUnassignedUser || pendingInvitation ? (
+          <main className="flex-1 p-6 lg:p-8 overflow-y-auto">
+            {renderContent()}
+          </main>
+      ) : null}
       {notification && <NotificationPopup notification={notification} />}
     </div>
   );
